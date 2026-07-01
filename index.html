@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>U.S. Treasury Yield Curve — Term Structure</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0d12; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  #scene-container { position: absolute; inset: 0; }
+  #scene-container canvas { display: block; }
+
+  .panel {
+    position: absolute;
+    background: rgba(15, 19, 26, 0.82);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    color: #e8ecf1;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  #hud {
+    top: 14px;
+    left: 14px;
+    padding: 14px 16px;
+    max-width: 340px;
+  }
+  #hud h1 { font-size: 15px; margin: 0 0 2px; font-weight: 600; letter-spacing: 0.2px; }
+  #hud .subtitle { font-size: 11px; color: #93a1b3; margin: 0 0 12px; }
+
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #7c8aa0; margin-bottom: 5px; }
+
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  button.range-btn, button.action-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #dfe6ee;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button.range-btn:hover, button.action-btn:hover { background: rgba(255,255,255,0.14); }
+  button.range-btn.active { background: #3d7bff; border-color: #3d7bff; color: #fff; }
+
+  input[type="range"] { width: 100%; accent-color: #3d7bff; }
+
+  #status {
+    margin-top: 10px;
+    font-size: 11px;
+    color: #93a1b3;
+    min-height: 14px;
+  }
+  #error-banner {
+    display: none;
+    margin-top: 10px;
+    font-size: 11.5px;
+    color: #ffb4b4;
+    background: rgba(255, 80, 80, 0.08);
+    border: 1px solid rgba(255, 80, 80, 0.25);
+    border-radius: 6px;
+    padding: 8px 10px;
+    line-height: 1.4;
+  }
+
+  #legend {
+    bottom: 16px;
+    left: 14px;
+    padding: 10px 14px;
+    width: 260px;
+  }
+  #legend .title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #7c8aa0; margin-bottom: 6px; }
+  #legend .bar { height: 10px; border-radius: 4px; }
+  #legend .scale-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: #c3ccd8; margin-top: 4px; }
+
+  #hint {
+    bottom: 16px;
+    right: 16px;
+    padding: 7px 12px;
+    font-size: 11px;
+    color: #93a1b3;
+  }
+
+  #tooltip {
+    position: absolute;
+    display: none;
+    pointer-events: none;
+    background: rgba(10, 13, 18, 0.95);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 12px;
+    color: #fff;
+    white-space: nowrap;
+    z-index: 20;
+  }
+  #tooltip .row { display: flex; gap: 8px; }
+  #tooltip .row + .row { margin-top: 2px; }
+  #tooltip .k { color: #93a1b3; }
+
+  .axis-label {
+    color: #b7c1cf;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+  .axis-title {
+    color: #e8ecf1;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+</style>
+</head>
+<body>
+  <div id="scene-container"></div>
+  <div id="tooltip"></div>
+
+  <div id="hud" class="panel">
+    <h1>U.S. Treasury Yield Curve</h1>
+    <p class="subtitle">Term structure surface — maturity × date × yield</p>
+
+    <div class="field">
+      <label>History window</label>
+      <div class="btn-row" id="range-buttons">
+        <button class="range-btn" data-range="1">1Y</button>
+        <button class="range-btn" data-range="5">5Y</button>
+        <button class="range-btn active" data-range="10">10Y</button>
+        <button class="range-btn" data-range="full">Full (1990–present)</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Vertical exaggeration (<span id="exag-value">3.0</span>×)</label>
+      <input type="range" id="exag-slider" min="1" max="8" step="0.5" value="3" />
+    </div>
+
+    <div class="field">
+      <button class="action-btn" id="reset-camera">Reset view</button>
+    </div>
+
+    <div id="status">Loading…</div>
+    <div id="error-banner"></div>
+  </div>
+
+  <div id="legend" class="panel">
+    <div class="title">Yield</div>
+    <div class="bar" id="legend-bar"></div>
+    <div class="scale-labels">
+      <span id="legend-min">0%</span>
+      <span id="legend-max">8%</span>
+    </div>
+  </div>
+
+  <div id="hint" class="panel">Drag to rotate · scroll to zoom · right-drag to pan</div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+    // ---------------------------------------------------------------------
+    // Constants
+    // ---------------------------------------------------------------------
+
+    const MATURITIES = [
+      { key: 'BC_1MONTH', label: '1 Mo' },
+      { key: 'BC_2MONTH', label: '2 Mo' },
+      { key: 'BC_3MONTH', label: '3 Mo' },
+      { key: 'BC_4MONTH', label: '4 Mo' },
+      { key: 'BC_6MONTH', label: '6 Mo' },
+      { key: 'BC_1YEAR', label: '1 Yr' },
+      { key: 'BC_2YEAR', label: '2 Yr' },
+      { key: 'BC_3YEAR', label: '3 Yr' },
+      { key: 'BC_5YEAR', label: '5 Yr' },
+      { key: 'BC_7YEAR', label: '7 Yr' },
+      { key: 'BC_10YEAR', label: '10 Yr' },
+      { key: 'BC_20YEAR', label: '20 Yr' },
+      { key: 'BC_30YEAR', label: '30 Yr' },
+    ];
+
+    const FULL_HISTORY_START_YEAR = 1990;
+    const X_EXTENT = 6;   // maturity axis world width
+    const Z_EXTENT = 18;  // date axis world depth
+    const Y_BASE_MAX = 4; // yield axis world height (before exaggeration), maps to data max yield
+
+    // ---------------------------------------------------------------------
+    // DOM references
+    // ---------------------------------------------------------------------
+
+    const container = document.getElementById('scene-container');
+    const tooltipEl = document.getElementById('tooltip');
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error-banner');
+    const legendBar = document.getElementById('legend-bar');
+    const legendMin = document.getElementById('legend-min');
+    const legendMax = document.getElementById('legend-max');
+    const exagSlider = document.getElementById('exag-slider');
+    const exagValueLabel = document.getElementById('exag-value');
+    const rangeButtonsEl = document.getElementById('range-buttons');
+    const resetCameraBtn = document.getElementById('reset-camera');
+
+    // ---------------------------------------------------------------------
+    // Three.js setup
+    // ---------------------------------------------------------------------
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0d12);
+    scene.fog = new THREE.Fog(0x0a0d12, 25, 60);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    container.appendChild(renderer.domElement);
+
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0px';
+    labelRenderer.domElement.style.left = '0px';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    container.appendChild(labelRenderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 4;
+    controls.maxDistance = 80;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    dirLight.position.set(8, 16, 10);
+    scene.add(dirLight);
+    const fillLight = new THREE.DirectionalLight(0x88aaff, 0.25);
+    fillLight.position.set(-10, 6, -8);
+    scene.add(fillLight);
+
+    // Group that holds the surface + everything whose height should react
+    // to the vertical-exaggeration slider (mesh + yield-axis ticks).
+    const dataGroup = new THREE.Group();
+    scene.add(dataGroup);
+
+    // Group for elements that stay fixed regardless of exaggeration
+    // (floor grid, maturity axis, date axis).
+    const staticGroup = new THREE.Group();
+    scene.add(staticGroup);
+
+    let surfaceMesh = null;
+    let currentGrid = null; // { dates, cols: MATURITIES, values[row][col], xScale, yScaleDate/*->world z*/, yScaleValue/*->world y*/, colorScale }
+
+    // ---------------------------------------------------------------------
+    // Data fetching
+    // ---------------------------------------------------------------------
+
+    async function fetchYear(year) {
+      const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${year}`);
+      const text = await res.text();
+      const xml = new DOMParser().parseFromString(text, 'application/xml');
+      if (xml.getElementsByTagName('parsererror').length) {
+        throw new Error(`XML parse error for ${year}`);
+      }
+      const entries = Array.from(xml.getElementsByTagName('entry'));
+      const rows = [];
+      for (const entry of entries) {
+        const props = entry.getElementsByTagName('m:properties')[0];
+        if (!props) continue;
+        const dateEl = props.getElementsByTagName('d:NEW_DATE')[0];
+        if (!dateEl || !dateEl.textContent) continue;
+        const date = new Date(dateEl.textContent);
+        if (isNaN(date.getTime())) continue;
+        const row = { date, values: {} };
+        for (const m of MATURITIES) {
+          const el = props.getElementsByTagName(`d:${m.key}`)[0];
+          const txt = el ? el.textContent.trim() : '';
+          row.values[m.key] = txt !== '' ? parseFloat(txt) : NaN;
+        }
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    async function fetchRange(startYear, endYear) {
+      const years = [];
+      for (let y = startYear; y <= endYear; y++) years.push(y);
+      let completed = 0;
+      let failures = 0;
+      const perYear = await Promise.all(years.map(async (y) => {
+        try {
+          const rows = await fetchYear(y);
+          completed++;
+          setStatus(`Loading Treasury data… ${completed}/${years.length} years`);
+          return rows;
+        } catch (e) {
+          console.warn('Failed to fetch year', y, e);
+          failures++;
+          completed++;
+          setStatus(`Loading Treasury data… ${completed}/${years.length} years`);
+          return [];
+        }
+      }));
+      const rows = perYear.flat();
+      rows.sort((a, b) => a.date - b.date);
+      if (rows.length === 0) {
+        throw new Error('No data returned for any requested year.');
+      }
+      if (failures > 0) {
+        console.warn(`${failures}/${years.length} year requests failed; continuing with available data.`);
+      }
+      return rows;
+    }
+
+    // ---------------------------------------------------------------------
+    // Grid + scene building
+    // ---------------------------------------------------------------------
+
+    function buildGrid(rows) {
+      const dates = rows.map((r) => r.date);
+      const cols = MATURITIES;
+      const values = rows.map((r) => cols.map((m) => r.values[m.key]));
+
+      let maxYield = 0;
+      for (const rowVals of values) {
+        for (const v of rowVals) {
+          if (Number.isFinite(v) && v > maxYield) maxYield = v;
+        }
+      }
+      if (maxYield <= 0) maxYield = 8;
+      maxYield = Math.ceil(maxYield * 1.05 * 10) / 10;
+
+      const xScale = d3.scalePoint().domain(cols.map((c) => c.label)).range([0, X_EXTENT]).padding(0.5);
+      const dateScale = d3.scaleTime().domain(d3.extent(dates)).range([0, Z_EXTENT]);
+      const valueScale = d3.scaleLinear().domain([0, maxYield]).range([0, Y_BASE_MAX]);
+      const colorScale = d3.scaleSequential(d3.interpolateTurbo).domain([0, maxYield]);
+
+      return { dates, cols, values, maxYield, xScale, dateScale, valueScale, colorScale };
+    }
+
+    function buildSurfaceMesh(grid) {
+      const { dates, cols, values, xScale, dateScale, valueScale, colorScale } = grid;
+      const rows = dates.length;
+      const numCols = cols.length;
+
+      const positions = new Float32Array(rows * numCols * 3);
+      const colors = new Float32Array(rows * numCols * 3);
+      const valid = new Uint8Array(rows * numCols);
+
+      let p = 0;
+      for (let r = 0; r < rows; r++) {
+        const z = dateScale(dates[r]);
+        for (let c = 0; c < numCols; c++) {
+          const raw = values[r][c];
+          const isValid = Number.isFinite(raw);
+          valid[r * numCols + c] = isValid ? 1 : 0;
+
+          const x = xScale(cols[c].label);
+          const y = isValid ? valueScale(raw) : 0;
+
+          positions[p * 3 + 0] = x;
+          positions[p * 3 + 1] = y;
+          positions[p * 3 + 2] = z;
+
+          const col = new THREE.Color(isValid ? colorScale(raw) : 0x222222);
+          colors[p * 3 + 0] = col.r;
+          colors[p * 3 + 1] = col.g;
+          colors[p * 3 + 2] = col.b;
+          p++;
+        }
+      }
+
+      const indices = [];
+      for (let r = 0; r < rows - 1; r++) {
+        for (let c = 0; c < numCols - 1; c++) {
+          const a = r * numCols + c;
+          const b = a + 1;
+          const cIdx = a + numCols;
+          const d = cIdx + 1;
+          if (valid[a] && valid[b] && valid[cIdx] && valid[d]) {
+            indices.push(a, cIdx, b);
+            indices.push(b, cIdx, d);
+          }
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+
+      const material = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide,
+        metalness: 0.05,
+        roughness: 0.75,
+      });
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.userData.grid = grid;
+      return mesh;
+    }
+
+    function clearGroup(group) {
+      while (group.children.length) {
+        const child = group.children.pop();
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose?.();
+        if (child.element && child.element.parentNode) {
+          // CSS2DObject cleanup handled by removing from group; DOM node is
+          // detached by CSS2DRenderer on next render pass.
+        }
+      }
+    }
+
+    function makeAxisLabel(text, className = 'axis-label') {
+      const div = document.createElement('div');
+      div.className = className;
+      div.textContent = text;
+      return new CSS2DObject(div);
+    }
+
+    function buildAxes(grid) {
+      clearGroup(staticGroup);
+      // Remove previous yield-axis children from dataGroup (mesh removed separately)
+      for (const child of [...dataGroup.children]) {
+        if (child.userData.isAxisPart) {
+          dataGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose?.();
+        }
+      }
+
+      const axisMat = new THREE.LineBasicMaterial({ color: 0x5b6b82 });
+      const lineGeo = (points) => new THREE.BufferGeometry().setFromPoints(points);
+
+      // Floor grid (fixed, not affected by exaggeration)
+      const floorGrid = new THREE.GridHelper(1, 24, 0x2a3444, 0x1c2430);
+      floorGrid.scale.set(X_EXTENT, 1, Z_EXTENT);
+      floorGrid.position.set(X_EXTENT / 2, 0, Z_EXTENT / 2);
+      staticGroup.add(floorGrid);
+
+      // Maturity axis (X) — fixed
+      staticGroup.add(new THREE.Line(lineGeo([
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(X_EXTENT, 0, 0),
+      ]), axisMat));
+      for (const c of grid.cols) {
+        const x = grid.xScale(c.label);
+        staticGroup.add(new THREE.Line(lineGeo([
+          new THREE.Vector3(x, 0, 0), new THREE.Vector3(x, 0, -0.25),
+        ]), axisMat));
+        const label = makeAxisLabel(c.label);
+        label.position.set(x, 0, -0.6);
+        staticGroup.add(label);
+      }
+      const xTitle = makeAxisLabel('MATURITY', 'axis-title');
+      xTitle.position.set(X_EXTENT / 2, 0, -1.4);
+      staticGroup.add(xTitle);
+
+      // Date axis (Z) — fixed
+      staticGroup.add(new THREE.Line(lineGeo([
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, Z_EXTENT),
+      ]), axisMat));
+      const spanMs = grid.dates[grid.dates.length - 1] - grid.dates[0];
+      const spanYears = spanMs / (365.25 * 24 * 3600 * 1000);
+      const dateFormat = spanYears > 4 ? d3.timeFormat('%Y') : d3.timeFormat('%b %Y');
+      const dateTicks = grid.dateScale.ticks(spanYears > 4 ? Math.min(10, Math.ceil(spanYears)) : 8);
+      for (const t of dateTicks) {
+        const z = grid.dateScale(t);
+        staticGroup.add(new THREE.Line(lineGeo([
+          new THREE.Vector3(0, 0, z), new THREE.Vector3(-0.25, 0, z),
+        ]), axisMat));
+        const label = makeAxisLabel(dateFormat(t));
+        label.position.set(-0.9, 0, z);
+        staticGroup.add(label);
+      }
+      const zTitle = makeAxisLabel('DATE', 'axis-title');
+      zTitle.position.set(-1.6, 0, Z_EXTENT / 2);
+      staticGroup.add(zTitle);
+
+      // Yield axis (Y) — lives in dataGroup so it stretches with exaggeration
+      const yAxisLine = new THREE.Line(lineGeo([
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, Y_BASE_MAX, 0),
+      ]), axisMat);
+      yAxisLine.userData.isAxisPart = true;
+      dataGroup.add(yAxisLine);
+      const valueTicks = grid.valueScale.ticks(5);
+      for (const t of valueTicks) {
+        const y = grid.valueScale(t);
+        const tick = new THREE.Line(lineGeo([
+          new THREE.Vector3(0, y, 0), new THREE.Vector3(-0.2, y, 0),
+        ]), axisMat);
+        tick.userData.isAxisPart = true;
+        dataGroup.add(tick);
+        const label = makeAxisLabel(`${t.toFixed(1)}%`);
+        label.userData.isAxisPart = true;
+        label.position.set(-0.55, y, 0);
+        dataGroup.add(label);
+      }
+      const yTitle = makeAxisLabel('YIELD', 'axis-title');
+      yTitle.userData.isAxisPart = true;
+      yTitle.position.set(-0.55, Y_BASE_MAX + 0.4, 0);
+      dataGroup.add(yTitle);
+    }
+
+    function buildLegend(grid) {
+      const stops = [];
+      const n = 12;
+      for (let i = 0; i <= n; i++) {
+        stops.push(grid.colorScale(grid.maxYield * (i / n)));
+      }
+      legendBar.style.background = `linear-gradient(to right, ${stops.join(',')})`;
+      legendMin.textContent = '0%';
+      legendMax.textContent = `${grid.maxYield.toFixed(1)}%`;
+    }
+
+    function frameCameraToGrid(grid) {
+      const cx = X_EXTENT / 2;
+      const cy = grid.valueScale(grid.maxYield / 2) * (parseFloat(exagSlider.value) * 0.4 + 0.6);
+      const cz = Z_EXTENT / 2;
+      camera.position.set(X_EXTENT * 1.6, Math.max(6, Y_BASE_MAX * 2.2), Z_EXTENT * 1.15);
+      controls.target.set(cx, cy * 0.3, cz);
+      controls.update();
+    }
+
+    async function loadRange(rangeSpec) {
+      errorEl.style.display = 'none';
+      setStatus('Loading Treasury data…');
+      const currentYear = new Date().getFullYear();
+      const startYear = rangeSpec === 'full' ? FULL_HISTORY_START_YEAR : currentYear - rangeSpec + 1;
+
+      let rows;
+      try {
+        rows = await fetchRange(startYear, currentYear);
+      } catch (err) {
+        console.error(err);
+        setStatus('');
+        showError(
+          `Could not load live Treasury data (${err.message}). ` +
+          `Check your internet connection. If this page was opened via double-click ` +
+          `and your browser blocks the request, try serving it locally instead ` +
+          `(e.g. "python3 -m http.server" in this folder, then open http://localhost:8000).`
+        );
+        return;
+      }
+
+      const grid = buildGrid(rows);
+      currentGrid = grid;
+
+      if (surfaceMesh) {
+        dataGroup.remove(surfaceMesh);
+        surfaceMesh.geometry.dispose();
+        surfaceMesh.material.dispose();
+      }
+      surfaceMesh = buildSurfaceMesh(grid);
+      dataGroup.add(surfaceMesh);
+
+      buildAxes(grid);
+      buildLegend(grid);
+      applyExaggeration();
+      frameCameraToGrid(grid);
+
+      const first = grid.dates[0], last = grid.dates[grid.dates.length - 1];
+      const fmt = d3.timeFormat('%b %d, %Y');
+      setStatus(`${grid.dates.length.toLocaleString()} trading days · ${fmt(first)} – ${fmt(last)}`);
+    }
+
+    function applyExaggeration() {
+      const factor = parseFloat(exagSlider.value);
+      dataGroup.scale.set(1, factor, 1);
+      exagValueLabel.textContent = factor.toFixed(1);
+    }
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function showError(msg) { errorEl.textContent = msg; errorEl.style.display = 'block'; }
+
+    // ---------------------------------------------------------------------
+    // Interaction: hover tooltip via raycasting
+    // ---------------------------------------------------------------------
+
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
+    const dateFmtTooltip = d3.timeFormat('%b %d, %Y');
+
+    renderer.domElement.addEventListener('pointermove', (event) => {
+      if (!surfaceMesh || !currentGrid) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObject(surfaceMesh, false);
+
+      if (hits.length === 0) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+
+      const face = hits[0].face;
+      const numCols = currentGrid.cols.length;
+      const vIdx = face.a; // any of a/b/c gives a nearby grid vertex
+      const row = Math.floor(vIdx / numCols);
+      const col = vIdx % numCols;
+      const yieldVal = currentGrid.values[row][col];
+      if (!Number.isFinite(yieldVal)) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+
+      tooltipEl.style.display = 'block';
+      tooltipEl.style.left = `${event.clientX + 14}px`;
+      tooltipEl.style.top = `${event.clientY + 14}px`;
+      tooltipEl.innerHTML = `
+        <div class="row"><span class="k">Maturity</span><strong>${currentGrid.cols[col].label}</strong></div>
+        <div class="row"><span class="k">Date</span><strong>${dateFmtTooltip(currentGrid.dates[row])}</strong></div>
+        <div class="row"><span class="k">Yield</span><strong>${yieldVal.toFixed(2)}%</strong></div>
+      `;
+    });
+
+    renderer.domElement.addEventListener('pointerleave', () => {
+      tooltipEl.style.display = 'none';
+    });
+
+    // ---------------------------------------------------------------------
+    // UI wiring
+    // ---------------------------------------------------------------------
+
+    rangeButtonsEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button.range-btn');
+      if (!btn) return;
+      for (const b of rangeButtonsEl.querySelectorAll('button')) b.classList.remove('active');
+      btn.classList.add('active');
+      const raw = btn.dataset.range;
+      const spec = raw === 'full' ? 'full' : parseInt(raw, 10);
+      loadRange(spec);
+    });
+
+    exagSlider.addEventListener('input', applyExaggeration);
+
+    resetCameraBtn.addEventListener('click', () => {
+      if (currentGrid) frameCameraToGrid(currentGrid);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------------------------------------------------------------------
+    // Render loop
+    // ---------------------------------------------------------------------
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+    }
+    animate();
+
+    // ---------------------------------------------------------------------
+    // Initial load
+    // ---------------------------------------------------------------------
+
+    loadRange(10);
+  </script>
+</body>
+</html>
