@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>U.S. Treasury Yield Curve — Term Structure</title>
+<title>U.S. Treasury Par Yield Curve — Term Structure</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -26,6 +26,8 @@
     left: 14px;
     padding: 14px 16px;
     max-width: 340px;
+    max-height: calc(100vh - 28px);
+    overflow-y: auto;
   }
   #hud h1 { font-size: 15px; margin: 0 0 2px; font-weight: 600; letter-spacing: 0.2px; }
   #hud .subtitle { font-size: 11px; color: #93a1b3; margin: 0 0 12px; }
@@ -47,6 +49,17 @@
   button.range-btn.active { background: #3d7bff; border-color: #3d7bff; color: #fff; }
 
   input[type="range"] { width: 100%; accent-color: #3d7bff; }
+
+  select#year-select {
+    width: 100%;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #dfe6ee;
+    padding: 5px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  select#year-select option { background: #12161d; color: #dfe6ee; }
 
   #status {
     margin-top: 10px;
@@ -72,6 +85,26 @@
     padding: 10px 14px;
     width: 260px;
   }
+  #par-note {
+    margin-top: 11px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  #par-note summary {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #7c8aa0;
+    cursor: pointer;
+    list-style: none;
+  }
+  #par-note summary::-webkit-details-marker { display: none; }
+  #par-note summary::before { content: '▸  '; }
+  #par-note[open] summary::before { content: '▾  '; }
+  #par-note summary:hover { color: #9dabbf; }
+  #par-note p { font-size: 11px; line-height: 1.55; color: #a4b0c0; margin: 8px 0 0; }
+  #par-note a { color: #7fa8ff; }
+
   #legend .title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #7c8aa0; margin-bottom: 6px; }
   #legend .bar { height: 10px; border-radius: 4px; }
   #legend .scale-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: #c3ccd8; margin-top: 4px; }
@@ -124,17 +157,25 @@
   <div id="tooltip"></div>
 
   <div id="hud" class="panel">
-    <h1>U.S. Treasury Yield Curve</h1>
-    <p class="subtitle">Term structure surface — maturity × date × yield</p>
+    <h1>U.S. Treasury Par Yield Curve</h1>
+    <p class="subtitle">CMT par rates — maturity × date × par yield</p>
 
     <div class="field">
       <label>History window</label>
       <div class="btn-row" id="range-buttons">
-        <button class="range-btn" data-range="1">1Y</button>
-        <button class="range-btn" data-range="5">5Y</button>
-        <button class="range-btn active" data-range="10">10Y</button>
-        <button class="range-btn" data-range="full">Full (1990–present)</button>
+        <button class="range-btn" data-months="6">6M</button>
+        <button class="range-btn active" data-months="12">1Y</button>
+        <button class="range-btn" data-months="60">5Y</button>
+        <button class="range-btn" data-months="120">10Y</button>
+        <button class="range-btn" data-full="1">Full (1990–present)</button>
       </div>
+    </div>
+
+    <div class="field">
+      <label>Or jump to a specific year</label>
+      <select id="year-select">
+        <option value="">Year…</option>
+      </select>
     </div>
 
     <div class="field">
@@ -142,16 +183,31 @@
       <input type="range" id="exag-slider" min="1" max="8" step="0.5" value="3" />
     </div>
 
-    <div class="field">
+    <div class="field btn-row">
       <button class="action-btn" id="reset-camera">Reset view</button>
+      <button class="action-btn" id="refresh-data">Refresh data</button>
     </div>
 
     <div id="status">Loading…</div>
     <div id="error-banner"></div>
+
+    <details id="par-note">
+      <summary>What is a par rate?</summary>
+      <p>Every point on this surface is a <strong>Constant Maturity Treasury (CMT) par
+      yield</strong>: the coupon a brand-new Treasury of that maturity would have to pay
+      to price at exactly 100 — at par.</p>
+      <p>Because par assumes issue at face value, it strips out the premium and discount
+      noise carried by whatever off-the-run bonds happen to be trading. That makes it
+      directly comparable to par swap rates, and it is the curve every other measure —
+      zero/spot, forward, real — gets bootstrapped from. It is the curve a desk quotes.</p>
+      <p>Source: <a href="https://home.treasury.gov/resource-center/data-chart-center/interest-rates/TextView?type=daily_treasury_yield_curve"
+      target="_blank" rel="noopener">Treasury Daily Par Yield Curve Rates</a> — free,
+      public, updated after each trading day's 3:30pm ET close.</p>
+    </details>
   </div>
 
   <div id="legend" class="panel">
-    <div class="title">Yield</div>
+    <div class="title">Par yield</div>
     <div class="bar" id="legend-bar"></div>
     <div class="scale-labels">
       <span id="legend-min">0%</span>
@@ -180,8 +236,14 @@
     // Constants
     // ---------------------------------------------------------------------
 
+    // Constant Maturity Treasury par-yield fields, shortest to longest. Treasury
+    // has widened the published set over time (1 Mo from 2001, 2 Mo from Oct 2018,
+    // 4 Mo from Oct 2022, 1.5 Mo — the 6-week bill — from 2025), so any given
+    // window only carries a subset; buildGrid() drops the tenors it has no data for.
+    // BC_30YEARDISPLAY is deliberately omitted: it duplicates BC_30YEAR.
     const MATURITIES = [
       { key: 'BC_1MONTH', label: '1 Mo' },
+      { key: 'BC_1_5MONTH', label: '1.5 Mo' },
       { key: 'BC_2MONTH', label: '2 Mo' },
       { key: 'BC_3MONTH', label: '3 Mo' },
       { key: 'BC_4MONTH', label: '4 Mo' },
@@ -216,6 +278,18 @@
     const exagValueLabel = document.getElementById('exag-value');
     const rangeButtonsEl = document.getElementById('range-buttons');
     const resetCameraBtn = document.getElementById('reset-camera');
+    const refreshDataBtn = document.getElementById('refresh-data');
+    const yearSelectEl = document.getElementById('year-select');
+
+    {
+      const currentYear = new Date().getFullYear();
+      for (let y = currentYear; y >= FULL_HISTORY_START_YEAR; y--) {
+        const opt = document.createElement('option');
+        opt.value = String(y);
+        opt.textContent = String(y);
+        yearSelectEl.appendChild(opt);
+      }
+    }
 
     // ---------------------------------------------------------------------
     // Three.js setup
@@ -275,7 +349,7 @@
 
     async function fetchYear(year) {
       const url = `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=${year}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${year}`);
       const text = await res.text();
       const xml = new DOMParser().parseFromString(text, 'application/xml');
@@ -338,7 +412,10 @@
 
     function buildGrid(rows) {
       const dates = rows.map((r) => r.date);
-      const cols = MATURITIES;
+      // Keep only tenors Treasury actually quoted somewhere in this window, so a
+      // short recent range doesn't carry dead axis columns and a full-history
+      // range doesn't hide the tenors that only exist late in the sample.
+      const cols = MATURITIES.filter((m) => rows.some((r) => Number.isFinite(r.values[m.key])));
       const values = rows.map((r) => cols.map((m) => r.values[m.key]));
 
       let maxYield = 0;
@@ -518,7 +595,7 @@
         label.position.set(-0.55, y, 0);
         dataGroup.add(label);
       }
-      const yTitle = makeAxisLabel('YIELD', 'axis-title');
+      const yTitle = makeAxisLabel('PAR YIELD', 'axis-title');
       yTitle.userData.isAxisPart = true;
       yTitle.position.set(-0.55, Y_BASE_MAX + 0.4, 0);
       dataGroup.add(yTitle);
@@ -539,20 +616,50 @@
       const cx = X_EXTENT / 2;
       const cy = grid.valueScale(grid.maxYield / 2) * (parseFloat(exagSlider.value) * 0.4 + 0.6);
       const cz = Z_EXTENT / 2;
-      camera.position.set(X_EXTENT * 1.6, Math.max(6, Y_BASE_MAX * 2.2), Z_EXTENT * 1.15);
+      // Camera sits close to the X axis (only a slight -X lean) and well
+      // back along +Z, looking back toward -X/-Z. That keeps the camera's
+      // screen-right aligned with world +X, so the short end (1 Mo, 2 Mo,
+      // at x=0) reads on-screen left and long end (30 Yr) on the right.
+      camera.position.set(cx - X_EXTENT * 0.35, Math.max(6, Y_BASE_MAX * 2.0), Z_EXTENT * 1.4);
       controls.target.set(cx, cy * 0.3, cz);
       controls.update();
     }
 
-    async function loadRange(rangeSpec) {
-      errorEl.style.display = 'none';
-      setStatus('Loading Treasury data…');
+    let currentSpec = null;
+
+    function resolveYearRange(spec) {
       const currentYear = new Date().getFullYear();
-      const startYear = rangeSpec === 'full' ? FULL_HISTORY_START_YEAR : currentYear - rangeSpec + 1;
+      if (spec.type === 'full') {
+        return { startYear: FULL_HISTORY_START_YEAR, endYear: currentYear, cutoffDate: null };
+      }
+      if (spec.type === 'year') {
+        return { startYear: spec.year, endYear: spec.year, cutoffDate: null };
+      }
+      // trailing window: fetch whole years covering it, then filter to the
+      // exact cutoff so "1Y" always means the last 12 months, not just the
+      // current calendar year.
+      const cutoffDate = new Date();
+      cutoffDate.setMonth(cutoffDate.getMonth() - spec.months);
+      return { startYear: cutoffDate.getFullYear(), endYear: currentYear, cutoffDate };
+    }
+
+    function describeSpec(spec) {
+      if (spec.type === 'full') return 'Full history (1990–present)';
+      if (spec.type === 'year') return `Year ${spec.year}`;
+      if (spec.months % 12 === 0) return `Trailing ${spec.months / 12}Y`;
+      return `Trailing ${spec.months}mo`;
+    }
+
+    async function loadRange(spec) {
+      currentSpec = spec;
+      errorEl.style.display = 'none';
+      setStatus(`Loading Treasury data… (${describeSpec(spec)})`);
+
+      const { startYear, endYear, cutoffDate } = resolveYearRange(spec);
 
       let rows;
       try {
-        rows = await fetchRange(startYear, currentYear);
+        rows = await fetchRange(startYear, endYear);
       } catch (err) {
         console.error(err);
         setStatus('');
@@ -562,6 +669,15 @@
           `and your browser blocks the request, try serving it locally instead ` +
           `(e.g. "python3 -m http.server" in this folder, then open http://localhost:8000).`
         );
+        return;
+      }
+
+      if (cutoffDate) {
+        rows = rows.filter((r) => r.date >= cutoffDate);
+      }
+      if (rows.length === 0) {
+        setStatus('');
+        showError('Treasury returned no trading days for this window.');
         return;
       }
 
@@ -583,7 +699,7 @@
 
       const first = grid.dates[0], last = grid.dates[grid.dates.length - 1];
       const fmt = d3.timeFormat('%b %d, %Y');
-      setStatus(`${grid.dates.length.toLocaleString()} trading days · ${fmt(first)} – ${fmt(last)}`);
+      setStatus(`${grid.dates.length.toLocaleString()} trading days · ${fmt(first)} – ${fmt(last)} · fetched just now`);
     }
 
     function applyExaggeration() {
@@ -634,7 +750,7 @@
       tooltipEl.innerHTML = `
         <div class="row"><span class="k">Maturity</span><strong>${currentGrid.cols[col].label}</strong></div>
         <div class="row"><span class="k">Date</span><strong>${dateFmtTooltip(currentGrid.dates[row])}</strong></div>
-        <div class="row"><span class="k">Yield</span><strong>${yieldVal.toFixed(2)}%</strong></div>
+        <div class="row"><span class="k">Par yield</span><strong>${yieldVal.toFixed(2)}%</strong></div>
       `;
     });
 
@@ -651,15 +767,25 @@
       if (!btn) return;
       for (const b of rangeButtonsEl.querySelectorAll('button')) b.classList.remove('active');
       btn.classList.add('active');
-      const raw = btn.dataset.range;
-      const spec = raw === 'full' ? 'full' : parseInt(raw, 10);
+      yearSelectEl.value = '';
+      const spec = btn.dataset.full ? { type: 'full' } : { type: 'trailing', months: parseInt(btn.dataset.months, 10) };
       loadRange(spec);
+    });
+
+    yearSelectEl.addEventListener('change', () => {
+      if (!yearSelectEl.value) return;
+      for (const b of rangeButtonsEl.querySelectorAll('button')) b.classList.remove('active');
+      loadRange({ type: 'year', year: parseInt(yearSelectEl.value, 10) });
     });
 
     exagSlider.addEventListener('input', applyExaggeration);
 
     resetCameraBtn.addEventListener('click', () => {
       if (currentGrid) frameCameraToGrid(currentGrid);
+    });
+
+    refreshDataBtn.addEventListener('click', () => {
+      if (currentSpec) loadRange(currentSpec);
     });
 
     window.addEventListener('resize', () => {
@@ -685,7 +811,7 @@
     // Initial load
     // ---------------------------------------------------------------------
 
-    loadRange(10);
+    loadRange({ type: 'trailing', months: 12 });
   </script>
 </body>
 </html>
